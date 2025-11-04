@@ -4,11 +4,14 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import IconPicker from '@/components/IconPicker'
 
 export default function CreateRoom() {
   const [roomName, setRoomName] = useState('')
   const [subject, setSubject] = useState('')
   const [direction, setDirection] = useState('up')
+  const [adminName, setAdminName] = useState('')
+  const [adminIcon, setAdminIcon] = useState('👤')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   
@@ -19,14 +22,15 @@ export default function CreateRoom() {
     setError('')
     setIsLoading(true)
 
-    if (!roomName.trim() || !subject.trim()) {
+    if (!roomName.trim() || !subject.trim() || !adminName.trim()) {
       setError('Please fill in all fields')
       setIsLoading(false)
       return
     }
 
     try {
-      const { data, error: insertError } = await supabase
+      // Create room
+      const { data: newRoom, error: insertError } = await supabase
         .from('rooms')
         .insert({
           name: roomName,
@@ -39,7 +43,36 @@ export default function CreateRoom() {
 
       if (insertError) throw insertError
 
-      router.push(`/room/${data.id}`)
+      // Add admin as first participant
+      const { data: adminUser, error: userError } = await supabase
+        .from('users')
+        .insert({
+          room_id: newRoom.id,
+          name: adminName.trim(),
+          icon: adminIcon,
+        })
+        .select()
+        .single()
+
+      if (userError) throw userError
+
+      // Store admin session in localStorage
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('countfetti_user', JSON.stringify({
+          userId: adminUser.id,
+          sessionToken: adminUser.session_token,
+          roomId: newRoom.id,
+        }))
+      }
+
+      // Update room with admin_id
+      await supabase
+        .from('rooms')
+        .update({ admin_id: adminUser.id })
+        .eq('id', newRoom.id)
+
+      // Redirect to room
+      router.push(`/room/${newRoom.id}`)
       
     } catch (err) {
       console.error('Error creating room:', err)
@@ -65,7 +98,7 @@ export default function CreateRoom() {
               type="text"
               value={roomName}
               onChange={(e) => setRoomName(e.target.value)}
-              placeholder="Dave's Beer Counter"
+              placeholder="Your Counter"
               className="w-full px-4 py-3 border-2 text-gray-800 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none transition-colors"
             />
           </div>
@@ -79,7 +112,7 @@ export default function CreateRoom() {
               type="text"
               value={subject}
               onChange={(e) => setSubject(e.target.value)}
-              placeholder="Times Dave said 'literally'"
+              placeholder="Beers, Points, High Fives..."
               className="w-full px-4 py-3 border-2 text-gray-800 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none transition-colors"
             />
           </div>
@@ -123,6 +156,32 @@ export default function CreateRoom() {
                 <span className="ml-3 text-gray-700">↕️ Both (+/-)</span>
               </label>
             </div>
+          </div>
+
+          {/* Admin Name Input */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Your Name
+            </label>
+            <input
+              type="text"
+              value={adminName}
+              onChange={(e) => setAdminName(e.target.value)}
+              placeholder="Your name"
+              className="w-full px-4 py-3 border-2 text-gray-800	 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none transition-colors"
+              maxLength={20}
+            />
+          </div>
+
+          {/* Admin Icon Picker */}
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Your Icon
+            </label>
+            <IconPicker 
+              selectedIcon={adminIcon} 
+              onSelectIcon={setAdminIcon}
+            />
           </div>
 
           {/* Error Message */}
