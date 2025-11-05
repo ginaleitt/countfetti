@@ -50,6 +50,7 @@ export default function CreateRoom() {
           room_id: newRoom.id,
           name: adminName.trim(),
           icon: adminIcon,
+          is_active: true, 
         })
         .select()
         .single()

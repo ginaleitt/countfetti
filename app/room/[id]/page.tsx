@@ -18,6 +18,7 @@ interface Participant {
 
 export default function RoomPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
+  const isInitialMount = useRef(true)
   
   const [room, setRoom] = useState<Room | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
@@ -32,14 +33,55 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   const router = useRouter()
   const rateLimiterRef = useRef(new RateLimiter(10, 1000)) // 10 clicks per second
 
+  // Helper functions for presence tracking
+  const markUserActive = async () => {
+    if (!currentUser?.id) {
+      console.log('⚠️ markUserActive: No currentUser.id, skipping')
+      return
+    }
+    
+    console.log('✅ markUserActive: Marking user active:', currentUser.id)
+    
+    try {
+      await supabase
+        .from('users')
+        .update({ is_active: true })
+        .eq('id', currentUser.id)
+      console.log('✅ markUserActive: Success')
+    } catch (err) {
+      console.error('❌ markUserActive: Error:', err)
+    }
+  }
+
+  const markUserInactive = async () => {
+    if (!currentUser?.id) {
+      console.log('⚠️ markUserInactive: No currentUser.id, skipping')
+      return
+    }
+    
+    console.log('🔴 markUserInactive: Marking user inactive:', currentUser.id)
+    
+    try {
+      await supabase
+        .from('users')
+        .update({ is_active: false })
+        .eq('id', currentUser.id)
+      console.log('🔴 markUserInactive: Success')
+    } catch (err) {
+      console.error('❌ markUserInactive: Error:', err)
+    }
+  }
+
   // Fetch room data on mount
   useEffect(() => {
+    console.log('🏠 Room page mounted, fetching room:', id)
     fetchRoom()
   }, [id])
 
   // Fetch participants on mount
   useEffect(() => {
     if (!id) return
+    console.log('👥 Fetching participants for room:', id)
     fetchParticipants()
   }, [id])
 
@@ -47,34 +89,92 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   useEffect(() => {
     if (typeof window === 'undefined') return
     
+    console.log('🔐 Checking for existing session in localStorage')
     const storedUser = localStorage.getItem('countfetti_user')
-    if (!storedUser) return
+    if (!storedUser) {
+      console.log('🔐 No stored user found')
+      return
+    }
 
     try {
       const userData = JSON.parse(storedUser)
+      console.log('🔐 Found stored user:', userData)
       
       // Check if this user belongs to this room
       if (userData.roomId === id) {
+        console.log('🔐 User belongs to this room, verifying session')
         verifySession(userData.userId, userData.sessionToken)
+      } else {
+        console.log('🔐 User belongs to different room, skipping')
       }
     } catch (err) {
-      console.error('Error parsing stored user:', err)
+      console.error('❌ Error parsing stored user:', err)
       localStorage.removeItem('countfetti_user')
     }
   }, [id])
 
+  // Update the presence tracking useEffect
+useEffect(() => {
+  if (!currentUser?.id) {
+    console.log('👋 Presence tracking: No currentUser, skipping')
+    return
+  }
   
-    // Show join prompt if user is not a member after loading
-    useEffect(() => {
-    if (!isLoading && room && !currentUser) {
-        // Always show join prompt if user is not identified
-        setShowJoinPrompt(true)
-    }
-    }, [isLoading, room, currentUser, participants])
+  console.log('👋 Presence tracking: Starting for user:', currentUser.id, currentUser.name)
+  
+  // Mark user as active when they enter the room
+  markUserActive()
+  
+  // Skip cleanup on initial mount (React Strict Mode double mount)
+  if (isInitialMount.current) {
+    isInitialMount.current = false
+    console.log('⚠️ Initial mount, skipping cleanup setup')
+    return
+  }
+  
+  // Handle tab close/browser close
+  const handleBeforeUnload = () => {
+    console.log('🚪 beforeunload: Tab closing, marking inactive')
+    markUserInactive()
+  }
+  
+  window.addEventListener('beforeunload', handleBeforeUnload)
+  
+  // Cleanup: mark inactive when leaving room
+  return () => {
+    console.log('🧹 Presence tracking cleanup: Removing listener and marking inactive')
+    window.removeEventListener('beforeunload', handleBeforeUnload)
+    markUserInactive()
+  }
+}, [currentUser?.id])
+
+  
+// Show join prompt if user is not a member after loading
+useEffect(() => {
+  console.log('🎯 Join prompt check:', { 
+    isLoading, 
+    hasRoom: !!room, 
+    hasCurrentUser: !!currentUser,
+    participantCount: participants.length 
+  })
+  
+  if (!isLoading && room && !currentUser) {
+    console.log('🎯 Setting showJoinPrompt to TRUE')
+    setShowJoinPrompt(true)
+  } else if (!isLoading && currentUser) {
+    // ADDED: Explicitly set to false when user is identified
+    console.log('🎯 Setting showJoinPrompt to FALSE')
+    setShowJoinPrompt(false)
+  } else {
+    console.log('🎯 showJoinPrompt unchanged')
+  }
+}, [isLoading, room, currentUser, participants])
 
   // Real-time subscription for counter updates
   useEffect(() => {
     if (!id) return
+
+    console.log('📡 Setting up real-time counter subscription for room:', id)
 
     const channel = supabase
       .channel(`room:${id}`)
@@ -87,7 +187,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
           filter: `id=eq.${id}`,
         },
         (payload) => {
-          console.log('Real-time counter update:', payload)
+          console.log('📡 Real-time counter update:', payload)
           setRoom(payload.new as Room)
           // Trigger animation for remote updates
           setIsAnimating(true)
@@ -97,38 +197,43 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
       .subscribe()
 
     return () => {
+      console.log('📡 Cleaning up counter subscription')
       supabase.removeChannel(channel)
     }
   }, [id])
 
-    // Real-time subscription for participants
-    useEffect(() => {
+  // Real-time subscription for participants
+  useEffect(() => {
     if (!id) return
 
+    console.log('📡 Setting up real-time participants subscription for room:', id)
+
     const channel = supabase
-        .channel(`users:${id}`)
-        .on(
+      .channel(`users:${id}`)
+      .on(
         'postgres_changes',
         {
-            event: '*',
-            schema: 'public',
-            table: 'users',
-            filter: `room_id=eq.${id}`,
+          event: '*',
+          schema: 'public',
+          table: 'users',
+          filter: `room_id=eq.${id}`,
         },
         () => {
-            console.log('Real-time participant update')
-            fetchParticipants() // This already filters by is_active
+          console.log('📡 Real-time participant update, refetching participants')
+          fetchParticipants() // This already filters by is_active
         }
-        )
-        .subscribe()
+      )
+      .subscribe()
 
     return () => {
-        supabase.removeChannel(channel)
+      console.log('📡 Cleaning up participants subscription')
+      supabase.removeChannel(channel)
     }
-    }, [id])
+  }, [id])
 
   const fetchRoom = async () => {
     try {
+      console.log('🏠 Fetching room data...')
       const { data, error: fetchError } = await supabase
         .from('rooms')
         .select('*')
@@ -137,6 +242,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
       if (fetchError) {
         if (fetchError.code === 'PGRST116') {
+          console.log('❌ Room not found')
           setError('Room not found')
         } else {
           throw fetchError
@@ -144,6 +250,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         return
       }
 
+      console.log('🏠 Room fetched successfully:', data)
       setRoom(data)
       
       await supabase
@@ -152,55 +259,88 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         .eq('id', id)
         
     } catch (err) {
-      console.error('Error fetching room:', err)
+      console.error('❌ Error fetching room:', err)
       setError('Failed to load room')
     } finally {
       setIsLoading(false)
+      console.log('🏠 Room loading complete, isLoading set to false')
     }
   }
 
   const fetchParticipants = async () => {
     try {
-        const { data, error } = await supabase
+      console.log('👥 Fetching participants...')
+      const { data, error } = await supabase
         .from('users')
         .select('*')
         .eq('room_id', id)
         .eq('is_active', true) // Only show active users
         .order('joined_at', { ascending: true })
 
-        if (error) throw error
-        setParticipants(data || [])
+      if (error) throw error
+      console.log('👥 Participants fetched:', data)
+      setParticipants(data || [])
     } catch (err) {
-        console.error('Error fetching participants:', err)
+      console.error('❌ Error fetching participants:', err)
     }
-    }
+  }
 
-    const verifySession = async (userId: string, sessionToken: string) => {
+  const verifySession = async (userId: string, sessionToken: string) => {
     try {
-        const { data, error } = await supabase
+      console.log('🔍 Verifying session for userId:', userId)
+      
+      const { data: initialData, error: checkError } = await supabase
         .from('users')
         .select('*')
         .eq('id', userId)
         .eq('session_token', sessionToken)
         .single()
 
-        if (error || !data) {
+      console.log('🔍 Initial data fetched:', initialData)
+
+      if (checkError || !initialData) {
+        console.log('❌ Session invalid, clearing localStorage')
         localStorage.removeItem('countfetti_user')
         return
-        }
+      }
 
-        // Check if user is still active
-        if (!data.is_active) {
-        // User left the room, clear their session
+      // Mark user as active
+      console.log('🔄 Updating user to is_active: true')
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ is_active: true })
+        .eq('id', userId)
+
+      if (updateError) {
+        console.log('❌ Error updating is_active:', updateError)
+        throw updateError
+      }
+      
+      console.log('✅ User marked as active')
+
+      // Refetch to get updated data
+      console.log('🔄 Refetching user data...')
+      const { data: updatedData, error: refetchError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single()
+
+      console.log('🔍 Refetched data:', updatedData)
+
+      if (refetchError || !updatedData) {
+        console.log('❌ Refetch failed, clearing localStorage')
         localStorage.removeItem('countfetti_user')
         return
-        }
+      }
 
-        setCurrentUser(data)
+      console.log('✅ Setting currentUser:', updatedData)
+      setCurrentUser(updatedData)
+      
     } catch (err) {
-        console.error('Error verifying session:', err)
+      console.error('❌ Error verifying session:', err)
     }
-    }
+  }
 
   const handleIncrement = async () => {
     if (!room) return
@@ -309,9 +449,10 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
   }
 
   const handleLeaveRoom = async () => {
+    console.log('👋 User leaving room')
     if (currentUser) {
-        // Mark user as inactive (not deleted!)
-        await supabase
+      // Mark user as inactive (not deleted!)
+      await supabase
         .from('users')
         .update({ is_active: false })
         .eq('id', currentUser.id)
@@ -322,7 +463,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     
     // Go home
     router.push('/')
-    }
+  }
 
   if (isLoading) {
     return (
@@ -353,6 +494,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
 
   // If user should join, show prompt
   if (showJoinPrompt) {
+    console.log('🎯 Rendering join prompt screen')
     return (
       <main className="min-h-screen flex items-center justify-center bg-linear-to-br from-purple-500 to-pink-500 p-4">
         <div className="bg-white rounded-lg shadow-2xl p-8 max-w-md w-full text-center">
@@ -379,6 +521,7 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
     )
   }
 
+  console.log('🎯 Rendering main room screen')
   return (
     <main className="min-h-screen flex items-center justify-center bg-linear-to-br from-purple-500 to-pink-500 p-4">
       <div className="bg-white rounded-lg shadow-2xl p-8 max-w-lg w-full">
@@ -478,11 +621,11 @@ export default function RoomPage({ params }: { params: Promise<{ id: string }> }
         </div>
 
         <button
-            onClick={handleLeaveRoom}
-            className="block w-full text-center py-3 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 font-medium transition-colors"
-            >
-            👋 Leave Room
-            </button>
+          onClick={handleLeaveRoom}
+          className="block w-full text-center py-3 rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200 font-medium transition-colors"
+        >
+          👋 Leave Room
+        </button>
       </div>
     </main>
   )

@@ -84,6 +84,7 @@ export default function JoinRoom({ params }: { params: Promise<{ id: string }> }
           room_id: id,
           name: userName.trim(),
           icon: userIcon,
+          is_active: true, 
         })
         .select()
         .single()
